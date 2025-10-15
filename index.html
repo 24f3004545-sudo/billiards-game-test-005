@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Billiards</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #f0f0f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        h1 {
+            margin: 10px 0;
+            font-weight: 300;
+        }
+
+        p {
+            margin: 5px 0 15px 0;
+            font-size: 1.2em;
+        }
+
+        #stroke-count {
+            font-weight: bold;
+        }
+
+        #table-container {
+            padding: 25px;
+            background-color: #654321; /* Wood color for the rails */
+            border-radius: 10px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        #pool-table {
+            background-color: #006400; /* Dark green for the felt */
+            display: block;
+        }
+
+    </style>
+</head>
+<body>
+
+    <h1>Simple Billiards</h1>
+    <p>Strokes: <span id="stroke-count">0</span></p>
+    <div id="table-container">
+        <canvas id="pool-table" width="800" height="400"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('pool-table');
+        const ctx = canvas.getContext('2d');
+        const strokeCountSpan = document.getElementById('stroke-count');
+
+        const TABLE_WIDTH = canvas.width;
+        const TABLE_HEIGHT = canvas.height;
+        const BALL_RADIUS = 10;
+        const FRICTION = 0.985;
+        const MIN_VELOCITY = 0.05;
+        const POWER_MULTIPLIER = 0.1;
+
+        let balls = [];
+        let cueBall;
+        let strokeCount = 0;
+        let isAiming = false;
+        let ballsAreMoving = false;
+        let mouse = { x: 0, y: 0 };
+        let aimStart = { x: 0, y: 0 };
+
+        class Ball {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = 0;
+                this.vy = 0;
+                this.radius = BALL_RADIUS;
+                this.color = color;
+                this.mass = 1;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.strokeStyle = '#00000033';
+                ctx.stroke();
+                ctx.closePath();
+            }
+
+            update() {
+                // Apply friction
+                this.vx *= FRICTION;
+                this.vy *= FRICTION;
+
+                // Stop ball if velocity is very low
+                if (Math.abs(this.vx) < MIN_VELOCITY) this.vx = 0;
+                if (Math.abs(this.vy) < MIN_VELOCITY) this.vy = 0;
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Wall collision
+                if (this.x - this.radius < 0) {
+                    this.x = this.radius;
+                    this.vx *= -1;
+                }
+                if (this.x + this.radius > TABLE_WIDTH) {
+                    this.x = TABLE_WIDTH - this.radius;
+                    this.vx *= -1;
+                }
+                if (this.y - this.radius < 0) {
+                    this.y = this.radius;
+                    this.vy *= -1;
+                }
+                if (this.y + this.radius > TABLE_HEIGHT) {
+                    this.y = TABLE_HEIGHT - this.radius;
+                    this.vy *= -1;
+                }
+            }
+        }
+
+        function init() {
+            balls = [];
+            // Cue ball
+            cueBall = new Ball(TABLE_WIDTH / 4, TABLE_HEIGHT / 2, 'white');
+            balls.push(cueBall);
+
+            // Object balls
+            balls.push(new Ball(TABLE_WIDTH * 0.65, TABLE_HEIGHT / 2, '#ff4136')); // Red
+            balls.push(new Ball(TABLE_WIDTH * 0.70, TABLE_HEIGHT / 2 - BALL_RADIUS * 1.2, '#ffd700')); // Yellow
+            
+            strokeCount = 0;
+            strokeCountSpan.textContent = strokeCount;
+
+            gameLoop();
+        }
+
+        function handleCollisions() {
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const ball1 = balls[i];
+                    const ball2 = balls[j];
+
+                    const dx = ball2.x - ball1.x;
+                    const dy = ball2.y - ball1.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < ball1.radius + ball2.radius) {
+                        // Collision detected
+                        const nx = dx / distance;
+                        const ny = dy / distance;
+                        const tx = -ny;
+                        const ty = nx;
+
+                        const dpTan1 = ball1.vx * tx + ball1.vy * ty;
+                        const dpTan2 = ball2.vx * tx + ball2.vy * ty;
+
+                        const dpNorm1 = ball1.vx * nx + ball1.vy * ny;
+                        const dpNorm2 = ball2.vx * nx + ball2.vy * ny;
+
+                        const m1 = (dpNorm1 * (ball1.mass - ball2.mass) + 2 * ball2.mass * dpNorm2) / (ball1.mass + ball2.mass);
+                        const m2 = (dpNorm2 * (ball2.mass - ball1.mass) + 2 * ball1.mass * dpNorm1) / (ball1.mass + ball2.mass);
+
+                        ball1.vx = tx * dpTan1 + nx * m1;
+                        ball1.vy = ty * dpTan1 + ny * m1;
+                        ball2.vx = tx * dpTan2 + nx * m2;
+                        ball2.vy = ty * dpTan2 + ny * m2;
+
+                        // Prevent overlap
+                        const overlap = (ball1.radius + ball2.radius) - distance;
+                        const overlapX = (overlap / 2) * nx;
+                        const overlapY = (overlap / 2) * ny;
+                        ball1.x -= overlapX;
+                        ball1.y -= overlapY;
+                        ball2.x += overlapX;
+                        ball2.y += overlapY;
+                    }
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, TABLE_WIDTH, TABLE_HEIGHT);
+
+            balls.forEach(ball => ball.draw());
+
+            if (isAiming) {
+                ctx.beginPath();
+                ctx.moveTo(cueBall.x, cueBall.y);
+                ctx.lineTo(mouse.x, mouse.y);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+        
+        function update() {
+            ballsAreMoving = false;
+            balls.forEach(ball => {
+                ball.update();
+                if (ball.vx !== 0 || ball.vy !== 0) {
+                    ballsAreMoving = true;
+                }
+            });
+            handleCollisions();
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function getMousePos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: evt.clientX - rect.left,
+                y: evt.clientY - rect.top
+            };
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (ballsAreMoving) return;
+
+            mouse = getMousePos(e);
+            const dx = mouse.x - cueBall.x;
+            const dy = mouse.y - cueBall.y;
+
+            if (Math.sqrt(dx * dx + dy * dy) < cueBall.radius) {
+                 isAiming = true;
+                 aimStart = { x: mouse.x, y: mouse.y };
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (isAiming) {
+                mouse = getMousePos(e);
+            }
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (isAiming) {
+                isAiming = false;
+                mouse = getMousePos(e);
+
+                const dx = mouse.x - cueBall.x;
+                const dy = mouse.y - cueBall.y;
+                
+                cueBall.vx = -dx * POWER_MULTIPLIER;
+                cueBall.vy = -dy * POWER_MULTIPLIER;
+                
+                strokeCount++;
+                strokeCountSpan.textContent = strokeCount;
+            }
+        });
+
+        init();
+    </script>
+</body>
+</html>
